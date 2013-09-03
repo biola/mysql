@@ -21,6 +21,8 @@
 
 include_recipe "mysql::client"
 
+root_password, debian_password, repl_password = String.new
+
 if Chef::Config[:solo]
   missing_attrs = %w{
     server_debian_password server_root_password server_repl_password
@@ -34,13 +36,28 @@ if Chef::Config[:solo]
         "For more information, see https://github.com/opscode-cookbooks/mysql#chef-solo-note"
       ].join(' '))
   end
+elsif !node['mysql']['users_databag'].empty?
+  if !node['mysql']['databag_encryption_key'].empty?
+    encryption_key = Chef::EncryptedDataBagItem.load_secret("#{node['mysql']['databag_encryption_key']}")
+    root_password = Chef::EncryptedDataBagItem.load(node['mysql']['users_databag'], 'root', encryption_key)['password']
+    debian_password = Chef::EncryptedDataBagItem.load(node['mysql']['users_databag'], 'debian-sys-maint', encryption_key)['password']
+    repl_password = Chef::EncryptedDataBagItem.load(node['mysql']['users_databag'], 'repl', encryption_key)['password']
+  else
+    root_password = data_bag_item(node['mysql']['users_databag'], 'root')['password']
+    debian_password = data_bag_item(node['mysql']['users_databag'], 'debian-sys-maint')['password']
+    repl_password = data_bag_item(node['mysql']['users_databag'], 'repl')['password']
+  end
 else
   # generate all passwords
-  node.set_unless['mysql']['server_debian_password'] = secure_password
-  node.set_unless['mysql']['server_root_password']   = secure_password
+  node.set_unless['mysql']['server_root_password'] = secure_password
+  node.set_unless['mysql']['server_debian_password']   = secure_password
   node.set_unless['mysql']['server_repl_password']   = secure_password
   node.save
 end
+
+root_password ||= node['mysql']['server_root_password']
+debian_password ||= node['mysql']['server_debian_password']
+repl_password ||= node['mysql']['server_repl_password']
 
 if platform_family?(%w{debian})
 
@@ -61,6 +78,9 @@ if platform_family?(%w{debian})
     owner "root"
     group node['mysql']['root_group']
     mode "0600"
+    variables(
+      :root_password => root_password
+    )
     notifies :run, "execute[preseed mysql-server]", :immediately
   end
 
@@ -69,6 +89,9 @@ if platform_family?(%w{debian})
     owner "root"
     group node['mysql']['root_group']
     mode "0600"
+    variables(
+      :debian_password => debian_password
+    )
   end
 
 end
@@ -164,7 +187,7 @@ end
 # set the root password for situations that don't support pre-seeding.
 # (eg. platforms other than debian/ubuntu & drop-in mysql replacements)
 execute "assign-root-password" do
-  command "\"#{node['mysql']['mysqladmin_bin']}\" -u root password \"#{node['mysql']['server_root_password']}\""
+  command "\"#{node['mysql']['mysqladmin_bin']}\" -u root password \"#{root_password}\""
   action :run
   only_if "\"#{node['mysql']['mysql_bin']}\" -u root -e 'show databases;'"
 end
@@ -181,19 +204,24 @@ unless platform_family?(%w{mac_os_x})
       owner "root" unless platform_family? 'windows'
       group node['mysql']['root_group'] unless platform_family? 'windows'
       mode "0600"
+      variables(
+        :root_password => root_password,
+        :debian_password => debian_password,
+        :repl_password => repl_password
+      )
       action :create
     end
   end
 
   if platform_family? 'windows'
     windows_batch "mysql-install-privileges" do
-      command "\"#{node['mysql']['mysql_bin']}\" -u root #{node['mysql']['server_root_password'].empty? ? '' : '-p' }\"#{node['mysql']['server_root_password']}\" < \"#{grants_path}\""
+      command "\"#{node['mysql']['mysql_bin']}\" -u root #{root_password.empty? ? '' : '-p' }\"#{root_password}\" < \"#{grants_path}\""
       action :nothing
       subscribes :run, resources("template[#{grants_path}]"), :immediately
     end
   else
     execute "mysql-install-privileges" do
-      command %Q["#{node['mysql']['mysql_bin']}" -u root #{node['mysql']['server_root_password'].empty? ? '' : '-p' }"#{node['mysql']['server_root_password']}" < "#{grants_path}"]
+      command %Q["#{node['mysql']['mysql_bin']}" -u root #{root_password.empty? ? '' : '-p' }"#{root_password}" < "#{grants_path}"]
       action :nothing
       subscribes :run, resources("template[#{grants_path}]"), :immediately
     end
