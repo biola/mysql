@@ -21,7 +21,7 @@
 
 include_recipe "mysql::client"
 
-root_password, debian_password, repl_password = String.new
+root_password, debian_password, repl_password = nil
 
 if Chef::Config[:solo]
   missing_attrs = %w{
@@ -36,8 +36,8 @@ if Chef::Config[:solo]
         "For more information, see https://github.com/opscode-cookbooks/mysql#chef-solo-note"
       ].join(' '))
   end
-elsif !node['mysql']['users_databag'].empty?
-  if !node['mysql']['databag_encryption_key'].empty?
+elsif !node['mysql']['users_databag'].nil?
+  if !node['mysql']['databag_encryption_key'].nil?
     encryption_key = Chef::EncryptedDataBagItem.load_secret("#{node['mysql']['databag_encryption_key']}")
     root_password = Chef::EncryptedDataBagItem.load(node['mysql']['users_databag'], 'root', encryption_key)['password']
     debian_password = Chef::EncryptedDataBagItem.load(node['mysql']['users_databag'], 'debian-sys-maint', encryption_key)['password']
